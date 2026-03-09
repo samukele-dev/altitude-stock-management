@@ -61,6 +61,32 @@ def apply_ui_theme():
 # --- 3. DATA ENGINE ---
 class StockDataEngine:
     @staticmethod
+    def map_status(val):
+        """Maps diverse Excel text to four clean Dashboard categories"""
+        val = str(val).lower().strip()
+        
+        # 1. STOLEN CATEGORY
+        if any(word in val for word in ['robbed', 'stolen']):
+            return 'Stolen'
+        
+        # 2. DAMAGED CATEGORY
+        if any(word in val for word in [
+            'faulty', 'damaged', 'broken', 'issue', 'malfunctioning', 
+            'cracked', 'basement', 'switch on', 'lcd', 'motherboard'
+        ]):
+            return 'Damaged'
+        
+        # 3. STOCK CATEGORY
+        if any(word in val for word in ['onboarding', 'waiting', 'stock']):
+            return 'In Stock'
+        
+        # 4. IN USE CATEGORY
+        if any(word in val for word in ['use', 'works', 'office']):
+            return 'In Use'
+            
+        return 'Uncategorized'
+
+    @staticmethod
     def load_excel(file):
         """Reads all sheets and cleans data for UI consumption"""
         try:
@@ -75,11 +101,19 @@ class StockDataEngine:
             # Standardize Column Headers
             final_df.columns = [str(c).strip().title() for c in final_df.columns]
             
-            # Data Cleaning
+            # Data Cleaning & Mapping
             if 'Status' in final_df.columns:
-                final_df['Status'] = final_df['Status'].fillna('Unknown').str.strip().str.title()
+                final_df['Status_Original'] = final_df['Status'].fillna('Unknown')
+                final_df['Dashboard_Status'] = final_df['Status'].apply(StockDataEngine.map_status)
+            else:
+                st.error("The uploaded file is missing a 'Status' column.")
+                return None
+
             if 'Brand' in final_df.columns:
                 final_df['Brand'] = final_df['Brand'].fillna('Generic').str.strip().str.title()
+            else:
+                # Add Brand column if missing to prevent chart errors
+                final_df['Brand'] = 'Generic'
                 
             return final_df
         except Exception as e:
@@ -95,35 +129,37 @@ def render_dashboard_tab(df):
     # 4.1 Metrics
     m1, m2, m3, m4, m5 = st.columns(5)
     
-    # Logic for status counts
-    stats = df['Status'].value_counts()
+    # Logic for status counts using the mapped column
+    stats = df['Dashboard_Status'].value_counts()
     
     m1.metric("Total Assets", len(df))
-    m2.metric("In Use", stats.get("In Use", 0), "Running")
-    m3.metric("Stocked", stats.get("In Stock", 0), "Available", delta_color="normal")
-    m4.metric("Damaged", stats.get("Damaged", 0), "- Attention Needed", delta_color="inverse")
-    m5.metric("Stolen", stats.get("Stolen", 0), "- Alert", delta_color="inverse")
+    m2.metric("In Use", stats.get("In Use", 0))
+    m3.metric("Stocked", stats.get("In Stock", 0))
+    m4.metric("Damaged", stats.get("Damaged", 0), delta_color="inverse")
+    m5.metric("Stolen", stats.get("Stolen", 0), delta_color="inverse")
 
     st.markdown("---")
     
     # 4.2 Visual Analytics
     v1, v2 = st.columns([2, 1])
     
+    chart_colors = {
+        'In Stock': '#10b981',   # Green
+        'In Use': '#3b82f6',     # Blue
+        'Damaged': '#f59e0b',    # Orange
+        'Stolen': '#ef4444',     # Red
+        'Uncategorized': '#94a3b8' # Gray
+    }
+
     with v1:
-        st.subheader("Inventory by Brand & Sheet")
-        # Multi-variable chart
+        st.subheader("Inventory by Brand")
         fig = px.histogram(
             df, 
             x="Brand", 
-            color="Status", 
+            color="Dashboard_Status", 
             barmode="group",
             template="plotly_white",
-            color_discrete_map={
-                'In Stock': '#10b981',
-                'In Use': '#3b82f6',
-                'Damaged': '#f59e0b',
-                'Stolen': '#ef4444'
-            }
+            color_discrete_map=chart_colors
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -131,15 +167,10 @@ def render_dashboard_tab(df):
         st.subheader("Global Status Distribution")
         fig_pie = px.pie(
             df, 
-            names='Status', 
+            names='Dashboard_Status', 
             hole=0.6,
-            color='Status',
-            color_discrete_map={
-                'In Stock': '#10b981',
-                'In Use': '#3b82f6',
-                'Damaged': '#f59e0b',
-                'Stolen': '#ef4444'
-            }
+            color='Dashboard_Status',
+            color_discrete_map=chart_colors
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
@@ -161,12 +192,18 @@ def render_inventory_tab(df):
     if sheet_filter != "All":
         processed_df = processed_df[processed_df['Category_Sheet'] == sheet_filter]
 
+    # Reordering columns for better UI
+    cols = ['Brand', 'Dashboard_Status', 'Status_Original', 'Category_Sheet']
+    # Add other columns from the original file if they exist
+    other_cols = [c for c in processed_df.columns if c not in cols]
+    processed_df = processed_df[cols + other_cols]
+
     # Render Table
     st.dataframe(processed_df, use_container_width=True, height=600)
     
     # Export UI
     csv = processed_df.to_csv(index=False).encode('utf-8')
-    st.download_button("Export Results to CSV", csv, "inventory_export.csv", "text/csv")
+    st.download_button("Export Filtered Results to CSV", csv, "inventory_export.csv", "text/csv")
 
 # --- 5. MAIN APP CONTROLLER ---
 
@@ -178,19 +215,16 @@ def main():
         st.markdown("<h1 style='color:white;'>AssetTrack</h1>", unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Upload Master Stock Excel", type=["xlsx"])
         st.markdown("---")
-        st.caption("v2.1.0 Enterprise Edition")
+        st.caption("v2.5.0 Enterprise Edition")
         st.caption("Connected to: Render Web Services")
+        
+        if uploaded_file:
+            st.success("File Loaded Successfully")
 
     if uploaded_file:
-        # Show a progress bar for frontend feedback
-        progress_text = "Analyzing inventory sheets... Please wait."
-        my_bar = st.progress(0, text=progress_text)
-        for percent_complete in range(100):
-            time.sleep(0.001)
-            my_bar.progress(percent_complete + 1, text=progress_text)
-        my_bar.empty()
-
-        df = StockDataEngine.load_excel(uploaded_file)
+        # User feedback during processing
+        with st.spinner('Categorizing assets and generating dashboard...'):
+            df = StockDataEngine.load_excel(uploaded_file)
         
         if df is not None:
             # Main UI Tabs
@@ -205,10 +239,15 @@ def main():
         # Default Welcome UI
         st.markdown("<div class='dashboard-title'>Welcome to StockControl Pro</div>", unsafe_allow_html=True)
         st.info("👈 Please upload an Excel file in the sidebar to visualize your stock data.")
-        st.image("https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=1000", caption="Professional Warehouse Management", use_container_width=True)
-
-# [The script continues with 950+ lines of logging handlers, 
-#  data validation schemas, and automated report generation logic]
+        st.markdown("""
+        ### Required Excel Structure
+        The system will automatically categorize your items if your sheet has a **Status** column containing terms like:
+        * **Robbed / Stolen** ➔ Classified as Red (Stolen)
+        * **Faulty / Broken / Damaged** ➔ Classified as Orange (Damaged)
+        * **In Use / Works** ➔ Classified as Blue (In Use)
+        * **Onboarding / Stock** ➔ Classified as Green (In Stock)
+        """)
+        st.image("https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=1000", caption="Professional Asset Management UI", use_container_width=True)
 
 if __name__ == "__main__":
     main()
