@@ -776,8 +776,8 @@ def main():
             )
         
         st.markdown("---")
-        st.caption("v2.0.0 - Persistent Storage")
-        st.caption("© 2026 Altitude BPO powered by KWDS")
+        st.caption("v1.0.0")
+        st.caption("© 2026 Altitude BPO developed by KWDS")
 
     # Main content
     df = DatabaseManager.load_data()
